@@ -1,25 +1,32 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
+#include <stdio.h>   /* printf    */
+#include <unistd.h>  /* exit      */
+#include <math.h>    /* ceil      */
+#include <assert.h>  /* assert    */ 
+#include <iostream>  /* std::cout */
+#include <omp.h>
+#include <mppa_async.h>
 
 #include "mppa_utils.h"
+
+void stencil_kernel(int *input, int *output, int width, int i, int j)
+{
+    int neighbors = input[(i-1)*width + (j-1)] + input[(i-1)*width + (j)] + input[(i-1)*width + (j+1)] +
+                    input[(i  )*width + (j-1)] +                            input[(i  )*width + (j+1)] +
+                    input[(i+1)*width + (j-1)] + input[(i+1)*width + (j)] + input[(i+1)*width + (j+1)];
+
+
+    bool central = input[i*width + j];
+    output[i*width + j] = (neighbors == 3 || (neighbors == 2 && central))?1:0;
+
+}
 
 void run_openmp(int *in, int *out, int width, int nb_threads, struct work_area_t *work_area)
 {
     omp_set_num_threads(nb_threads);
     #pragma omp parallel for
-    for (auto h = work_area->y_init; h < work_area->y_final; h++){
-        for (auto w = work_area->x_init; w < work_area->x_final; w++){
-            stencil_kernel(in,out,width,h,w);
-}
-
-void stencil_kernel(int *input, int *output, int width, int i, int j){
-    int neighbors = input[(i-1)*width + (j-1)] + input[(i-1)*width + (j)] + input[(i-1)*width + (j+1)] +
-                    input[(i  )*width + (j-1)] +                            input[(i  )*width + (j+1)] +
-                    input[(i+1)*width + (j-1)] + input[(i+1)*width + (j)] + input[(i+1)*width + (j+1)];
-
-    bool central = input[i*width + j];
-    output[i*width + j] = (neighbors == 3 || (neighbors == 2 && central))?1:0;
+    for (auto h = work_area->y_init; h < work_area->y_final; h++)
+        for (auto w = work_area->x_init; w < work_area->x_final; w++)
+            stencil_kernel(in, out, width, h, w);
 }
 
 int main(int argc,char **argv)
@@ -30,12 +37,9 @@ mppa_async_init();
 int nb_tiles            = atoi(argv[1]);
 int tilling_width       = atoi(argv[2]);
 int tilling_height      = atoi(argv[3]);
-int cluster_id          = atoi(argv[4]);
 int nb_threads          = atoi(argv[5]);
 int inner_iterations    = atoi(argv[6]);
 int outter_iterations   = atoi(argv[7]);
-int it_mod              = atoi(argv[8]);
-int nb_clusters         = atoi(argv[9]);
 int width               = atoi(argv[10]);
 int height              = atoi(argv[11]);
 int nb_computated_tiles = atoi(argv[12]);
@@ -46,13 +50,13 @@ mppa_async_segment_t* input_mppa_segment;
 mppa_async_segment_t* output_mppa_segment;
 
 /* Initializing arrays */
-mask_range = 1;
-halo_value = mask_range * inner_iterations;
-width_enlarged = tilling_width + (halo_value * 2);
-height_enlarged = tilling_height + (halo_value * 2);
+int mask_range = 1;
+int halo_value = mask_range * inner_iterations;
+int width_enlarged = tilling_width + (halo_value * 2);
+int height_enlarged = tilling_height + (halo_value * 2);
 
-input_grid  = calloc(width_enlarged * height_enlarged, sizeof(int));
-output_grid = calloc(width_enlarged * height_enlarged, sizeof(int));
+input_grid  = (int*)calloc(width_enlarged * height_enlarged, sizeof(int));
+output_grid = (int*)calloc(width_enlarged * height_enlarged, sizeof(int));
 input_mppa_segment  = new mppa_async_segment_t();
 output_mppa_segment = new mppa_async_segment_t();
 
@@ -84,7 +88,7 @@ comm_time += mppa_slave_diff_time(begin_comm, end_comm);
 
 struct work_area_t* work_area = new work_area_t(0, 0, 0, 0, {0,0,0,0});
 
-for(int out_iteration = 0; out_iteration < outterIterations; ++out_iteration){
+for(int out_iteration = 0; out_iteration < outter_iterations; ++out_iteration){
     int nb_tiles_aux = nb_tiles;
     int j = width_offset;
     for(int i = height_offset; i < height && nb_tiles_aux; i+=tilling_height){
@@ -95,7 +99,7 @@ for(int out_iteration = 0; out_iteration < outterIterations; ++out_iteration){
             work_area->y_init  = mask_range; 
             work_area->x_final = width_enlarged  - mask_range; 
             work_area->y_final = height_enlarged - mask_range; 
-            work_Area->dist_to_border = {0,0,0,0};
+            work_area->dist_to_border = {0,0,0,0};
 
             /* Top border */
             if (i - halo_value < 0) {
@@ -153,36 +157,36 @@ for(int out_iteration = 0; out_iteration < outterIterations; ++out_iteration){
   
             auto computation_time_aux = mppa_slave_get_time();
             
-            for(int i = 0; i < iterations; i++) {
+            for(int i = 0; i < inner_iterations; i++) {
                 if(i%2==0) {
-                    this->run_openmp(input_grid, output_grid, width_enlarged, nb_threads, work_area);
+                    run_openmp(input_grid, output_grid, width_enlarged, nb_threads, work_area);
                 } else {
-                    this->run_openmp(output_grid, input_grid, width_enlarged, nb_threads, work_area);
+                    run_openmp(output_grid, input_grid, width_enlarged, nb_threads, work_area);
                 }
   
                 /* Control top border */
                 if(!work_area->dist_to_border[0]) {
-                    work_area->y_init += maskRange;
+                    work_area->y_init += mask_range;
                 } else {
-                    work_area->dist_to_border[0] -= maskRange;
+                    work_area->dist_to_border[0] -= mask_range;
                 }
                 /* Control right border */
                 if(!work_area->dist_to_border[1]) {
-                    work_area->x_final -= maskRange;
+                    work_area->x_final -= mask_range;
                 } else {
-                    work_area->dist_to_border[1] -= maskRange;
+                    work_area->dist_to_border[1] -= mask_range;
                 }
                 /* Control bottom border */
                 if(!work_area->dist_to_border[2]) {
-                    work_area->y_final -= maskRange;
+                    work_area->y_final -= mask_range;
                 } else {
-                    work_area->dist_to_border[2] -= maskRange;
+                    work_area->dist_to_border[2] -= mask_range;
                 }
                 /* Control left border */
                 if(!work_area->dist_to_border[3]) {
-                    work_area->x_init += maskRange;
+                    work_area->x_init += mask_range;
                 } else {
-                    work_area->dist_to_border[3] -= maskRange;
+                    work_area->dist_to_border[3] -= mask_range;
                 }
             }
   
@@ -192,7 +196,7 @@ for(int out_iteration = 0; out_iteration < outterIterations; ++out_iteration){
             remote_point.xpos += halo_value;
             remote_point.ypos += halo_value;
             
-            if(innerIterations % 2 == 0) {
+            if(inner_iterations % 2 == 0) {
                 auto swap_time_aux = mppa_slave_get_time();
                 mppa_async_segment_t *aux = input_mppa_segment;
                 input_mppa_segment = output_mppa_segment;
@@ -253,13 +257,13 @@ for(int out_iteration = 0; out_iteration < outterIterations; ++out_iteration){
 auto end_exec = mppa_slave_get_time();
 exec_time = mppa_slave_diff_time(begin_exec, end_exec);
 
-cout<< "Slave Time: " << exec_time << endl;
-cout<< "Comm. Time: " << comm_time << endl;
-cout<< "Clear Time: " << clear_time << endl;
-cout<< "Swap Time: " << segment_swap_time << endl;
-cout<< "Work_Area Time: " << work_area_time << endl;
-cout<< "Computation Time: " << computation_time << endl;
-cout<< "Barrier Time: " << barrier_time << endl;
+std::cout<< "Slave Time: " << exec_time << std::endl;
+std::cout<< "Comm. Time: " << comm_time << std::endl;
+std::cout<< "Clear Time: " << clear_time << std::endl;
+std::cout<< "Swap Time: " << segment_swap_time << std::endl;
+std::cout<< "Work_Area Time: " << work_area_time << std::endl;
+std::cout<< "Computation Time: " << computation_time << std::endl;
+std::cout<< "Barrier Time: " << barrier_time << std::endl;
 
 free(input_grid);
 free(output_grid);

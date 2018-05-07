@@ -1,14 +1,17 @@
-#include <stdio.h>
-#include <string.h>
-#include <assert.h>
-#include <stdlib.h>
-#include <sched.h>
-#include <unistd.h>
-#include <mppaipc.h>
+#include <stdio.h>   /* printf */
+#include <stdlib.h>  /* exit   */
+#include <math.h>    /* ceil   */
+#include <assert.h>  /* assert */ 
+#include <utask.h>
+#include <mppa_async.h>
+#include <mppa_power.h>
+
+#include <iostream>
 
 #define ARGC_SLAVE 14
 
-int main(int argc, char **argv){
+int main(int argc, char **argv)
+{
     if(argc != 9){
         printf ("Wrong number of parameters.\n");
         printf("Usage: WIDTH HEIGHT TILING_HEIGHT TILING_WIDTH ITERATIONS INNER_ITERATIONS NUMBER_CLUSTERS NUMBER_THREADS\n");
@@ -26,6 +29,8 @@ int main(int argc, char **argv){
         mask_range,
         halo_value;
 
+    int width_enlarged;
+    int height_enlarged;    
     int *input_grid;
     int *output_grid;
     mppa_async_segment_t* input_mppa_segment;
@@ -101,8 +106,8 @@ int main(int argc, char **argv){
     width_enlarged = width + (halo_value * 2);
     height_enlarged = height + (halo_value * 2);
 
-    input_grid = calloc(width_enlarged * height_enlarged, sizeof(int));
-    output_grid = calloc(width_enlarged * height_enlarged, sizeof(int));
+    input_grid = (int *)calloc(width_enlarged * height_enlarged, sizeof(int));
+    output_grid = (int *)calloc(width_enlarged * height_enlarged, sizeof(int));
     output_mppa_segment = new mppa_async_segment_t();
     input_mppa_segment  = new mppa_async_segment_t();
  
@@ -111,9 +116,8 @@ int main(int argc, char **argv){
         for(int w = 0 + halo_value; w < width + halo_value; w++)
             input_grid[h * width_enlarged + w] = rand()%2;
 
-
-    assert(mppa_async_segment_create(input_mppa_segment,  1, input_grid,  sizeof(width_enlarged * height_enlarged, sizeof(int)),  0, 0, NULL) == 0);
-    assert(mppa_async_segment_create(output_mppa_segment, 2, output_grid, sizeof(width_enlarged * height_enlarged, sizeof(int)), 0, 0, NULL) == 0);
+    assert(mppa_async_segment_create(input_mppa_segment,  1, input_grid,  width_enlarged * height_enlarged * sizeof(int), 0, 0, NULL) == 0);
+    assert(mppa_async_segment_create(output_mppa_segment, 2, output_grid, width_enlarged * height_enlarged * sizeof(int), 0, 0, NULL) == 0);
         
 
     /* Wait the end of the clusters */
@@ -125,6 +129,21 @@ int main(int argc, char **argv){
         }
         status += ret;
     }
+
+    std::string grid = "";
+    for(int h=0; h < height + halo_value*2; h++) {
+     for(int w=0; w < width + halo_value*2; w++) {
+         int element = output_grid[h*width_enlarged + w];
+         char celement[10];
+         sprintf(celement, " %d", element);
+         grid+= celement;
+     }
+     grid += "\n";
+    }
+    std::cout << grid << std::endl;
+
+
+
     if(status != 0)
         exit(-1);
 
