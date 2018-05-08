@@ -34,7 +34,7 @@ jacobi-async-master-lflags += -lpcie_queue
 
 cluster-bin += jacobi-async-slave
 jacobi-async-slave-srcs := $(SRCDIR)/slave.cpp       \
-                        $(INCDIR)/mppa_utils.cpp 
+                        $(SRCDIR)/mppa_utils.cpp 
 
 # Toolchain Configuration
 jacobi-async-slave-system   := bare

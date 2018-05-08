@@ -34,7 +34,7 @@ convolution-async-master-lflags += -lpcie_queue
 
 cluster-bin += convolution-async-slave
 convolution-async-slave-srcs := $(SRCDIR)/slave.cpp       \
-                        $(INCDIR)/mppa_utils.cpp 
+                        		$(SRCDIR)/mppa_utils.cpp 
 
 # Toolchain Configuration
 convolution-async-slave-system   := bare

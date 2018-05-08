@@ -1,276 +1,301 @@
+#include <stdio.h>   /* printf    */
+#include <unistd.h>  /* exit      */
+#include <math.h>    /* ceil      */
+#include <assert.h>  /* assert    */ 
+#include <iostream>  /* std::cout */
+#include <omp.h>
+#include <mppa_async.h>
 
-#include <stdio.h>
-#include <iostream>
-#include <fstream>
-#include <string>
-#include <sstream>
+#include "mppa_utils.h"
 
-#define PSKEL_MPPA
-#define MPPA_SLAVE
+static float h_constant; 
 
-#include "../../include/mppa_utils.h"
-#include "../../include/PSkel.h"
-
-#define MASK_RADIUS 2
-#define MASK_WIDTH  5
-
-using namespace std;
-using namespace PSkel;
-
-struct Coeff{
-  int null;
-};
-
-struct Arguments
+void stencil_kernel(float *input, float *output, int width, int i, int j)
 {
-  int dummy;
-};
+    output[i*width + j] = input[(i-2)*width + (j+2)] * 0.0 +
+                          input[(i-1)*width + (j+2)] * 0.0 +
+                          input[ i   *width + (j+2)] * 0.0 +
+                          input[(i+1)*width + (j+2)] * 0.0 +
+                          input[(i+2)*width + (j+2)] * 0.0 +
+                          input[(i-2)*width + (j+1)] * 0.0 +
+                          input[(i-1)*width + (j+1)] * 0.0 +
+                          input[ i   *width + (j+1)] * 0.1 +
+                          input[(i+1)*width + (j+1)] * 0.0 +
+                          input[(i+2)*width + (j+1)] * 0.0 +
+                          input[(i-2)*width +  j   ] * 0.0 +
+                          input[(i-1)*width +  j   ] * 0.1 +
+                          input[ i   *width +  j   ] * 0.2 +
+                          input[(i+1)*width +  j   ] * 0.1 +
+                          input[(i+2)*width +  j   ] * 0.0 +
+                          input[(i-2)*width + (j-1)] * 0.0 +
+                          input[(i-1)*width + (j-1)] * 0.0 +
+                          input[ i   *width + (j-1)] * 0.1 +
+                          input[(i+1)*width + (j-1)] * 0.0 +
+                          input[(i+2)*width + (j-1)] * 0.0 +
+                          input[(i-2)*width + (j-2)] * 0.0 +
+                          input[(i-1)*width + (j-2)] * 0.0 +
+                          input[ i   *width + (j-2)] * 0.0 +
+                          input[(i+1)*width + (j-2)] * 0.0 +
+                          input[(i+2)*width + (j-2)] * 0.0; 
+}
 
-//*******************************************************************************************
-// WB_IMAGE
-//*******************************************************************************************
-struct wbImage_t
+void run_openmp(float *in, float *out, int width, int nb_threads, struct work_area_t *work_area)
 {
-    int  _imageWidth;
-    int  _imageHeight;
-    int  _imageChannels;
-  PSkel::Array2D<float> _red;
-  PSkel::Array2D<float> _green;
-  PSkel::Array2D<float> _blue;
+    omp_set_num_threads(nb_threads);
+    #pragma omp parallel for
+    for (auto h = work_area->y_init; h < work_area->y_final; h++)
+        for (auto w = work_area->x_init; w < work_area->x_final; w++)
+            stencil_kernel(in, out, width, h, w);
+}
 
-    wbImage_t(int imageWidth = 0, int imageHeight = 0, int imageChannels = 0) :_imageWidth(imageWidth), _imageHeight(imageHeight), _imageChannels(imageChannels)
-    {
-    new (&_red) PSkel::Array2D<float>(_imageWidth,_imageHeight);
-    new (&_green) PSkel::Array2D<float>(_imageWidth,_imageHeight);
-    new (&_blue) PSkel::Array2D<float>(_imageWidth,_imageHeight);
+int main(int argc,char **argv)
+{
+mppa_rpc_client_init();
+mppa_async_init();
+
+int nb_tiles            = atoi(argv[1]);
+int tilling_width       = atoi(argv[2]);
+int tilling_height      = atoi(argv[3]);
+int nb_threads          = atoi(argv[5]);
+int inner_iterations    = atoi(argv[6]);
+int outter_iterations   = atoi(argv[7]);
+int width               = atoi(argv[10]);
+int height              = atoi(argv[11]);
+int nb_computated_tiles = atoi(argv[12]);
+
+float *input_grid;
+float *output_grid;
+mppa_async_segment_t* input_mppa_segment;
+mppa_async_segment_t* output_mppa_segment;
+
+/* Initializing arrays */
+int mask_range = 2;
+int halo_value = mask_range * inner_iterations;
+int width_enlarged = tilling_width + (halo_value * 2);
+int height_enlarged = tilling_height + (halo_value * 2);
+
+input_grid  = (float*)calloc(width_enlarged * height_enlarged, sizeof(float));
+output_grid = (float*)calloc(width_enlarged * height_enlarged, sizeof(float));
+input_mppa_segment  = new mppa_async_segment_t();
+output_mppa_segment = new mppa_async_segment_t();
+
+h_constant = 4.f / (float) (width*width);
+
+double exec_time = 0;
+double comm_time = 0;
+double clear_time = 0;
+double segment_swap_time = 0;
+double work_area_time = 0;
+double computation_time = 0;
+double barrier_time = 0;
+
+auto begin_exec = mppa_slave_get_time();
+auto begin_comm = mppa_slave_get_time();
+
+assert(mppa_async_segment_clone(input_mppa_segment,  1, NULL, 0, NULL) == 0);
+assert(mppa_async_segment_clone(output_mppa_segment, 2, NULL, 0, NULL) == 0);
+
+/* Number of tiles in x axis */
+int w_tiling = ceil(float(width)/float(tilling_width));
+
+/* Starting point in x axis */
+int width_offset = (nb_computated_tiles % w_tiling) * (tilling_width);
+
+/* Startig point in y axis */
+int height_offset = floor(float(nb_computated_tiles)/float(w_tiling)) * (tilling_height);
+
+auto end_comm = mppa_slave_get_time();
+comm_time += mppa_slave_diff_time(begin_comm, end_comm);
+
+struct work_area_t* work_area = new work_area_t(0, 0, 0, 0, {0,0,0,0});
+
+for(int out_iteration = 0; out_iteration < outter_iterations; ++out_iteration){
+    int nb_tiles_aux = nb_tiles;
+    int j = width_offset;
+    for(int i = height_offset; i < height && nb_tiles_aux; i+=tilling_height){
+        for(; j < width && nb_tiles_aux; j+=tilling_width){
+            auto work_area_time_aux = mppa_slave_get_time();
+            
+            work_area->x_init  = mask_range; 
+            work_area->y_init  = mask_range; 
+            work_area->x_final = width_enlarged  - mask_range; 
+            work_area->y_final = height_enlarged - mask_range; 
+            work_area->dist_to_border = {0,0,0,0};
+
+            /* Top border */
+            if (i - halo_value < 0) {
+                work_area->y_init = -(i-(halo_value));
+                work_area->dist_to_border[0] = -(i - (halo_value)) - mask_range;
+            }
+            /* Rigth border*/
+            if (j + tilling_width + (halo_value) - width  > 0) {
+                work_area->x_final = width_enlarged - (j + tilling_width + (halo_value) - width);
+                work_area->dist_to_border[1] = (j + tilling_width + (halo_value) - width) - mask_range;
+            }
+            /* Bottom border */
+            if (i + tilling_height + (halo_value) - height > 0) {
+                work_area->y_final = height_enlarged - (i + tilling_height + (halo_value) - height);
+                work_area->dist_to_border[2] = (i + tilling_height + (halo_value) - height) - mask_range;
+            }
+            /* Left border */
+            if(j - (halo_value) < 0) {
+                work_area->x_init = -(j-(halo_value));
+                work_area->dist_to_border[3] = (-(j-(halo_value))) - mask_range;
+            }
+  
+            work_area_time += mppa_slave_diff_time(work_area_time_aux, mppa_slave_get_time());
+  
+            auto clear_aux = mppa_slave_get_time();
+            memset(output_grid, 0, width_enlarged * height_enlarged * sizeof(float));
+            clear_time += mppa_slave_diff_time(clear_aux, mppa_slave_get_time());
+  
+            begin_comm = mppa_slave_get_time();
+
+  
+            mppa_async_point2d_t remote_point = {
+                j, // xpos
+                i, // ypos
+                width + halo_value*2, // xdim
+                height + halo_value*2, // ydim
+            };
+  
+            mppa_async_point2d_t local_point = 
+            {
+              0,               // xpos
+              0,               // ypos
+              width_enlarged,  // xdim
+              height_enlarged, // ydim
+            };
+  
+            assert(mppa_async_sget_block2d(input_grid, 
+                                           input_mppa_segment,
+                                           0, sizeof(float), width_enlarged, height_enlarged,
+                                           &local_point,
+                                           &remote_point,
+                                           NULL) == 0);
+  
+
+            end_comm = mppa_slave_get_time();
+            comm_time += mppa_slave_diff_time(begin_comm, end_comm);
+  
+            auto computation_time_aux = mppa_slave_get_time();
+            
+            for(int i = 0; i < inner_iterations; i++) {
+                if(i%2==0) {
+                    run_openmp(input_grid, output_grid, width_enlarged, nb_threads, work_area);
+                } else {
+                    run_openmp(output_grid, input_grid, width_enlarged, nb_threads, work_area);
+                }
+  
+                /* Control top border */
+                if(!work_area->dist_to_border[0]) {
+                    work_area->y_init += mask_range;
+                } else {
+                    work_area->dist_to_border[0] -= mask_range;
+                }
+                /* Control right border */
+                if(!work_area->dist_to_border[1]) {
+                    work_area->x_final -= mask_range;
+                } else {
+                    work_area->dist_to_border[1] -= mask_range;
+                }
+                /* Control bottom border */
+                if(!work_area->dist_to_border[2]) {
+                    work_area->y_final -= mask_range;
+                } else {
+                    work_area->dist_to_border[2] -= mask_range;
+                }
+                /* Control left border */
+                if(!work_area->dist_to_border[3]) {
+                    work_area->x_init += mask_range;
+                } else {
+                    work_area->dist_to_border[3] -= mask_range;
+                }
+            }
+  
+            computation_time += mppa_slave_diff_time(computation_time_aux, mppa_slave_get_time());
+  
+            begin_comm = mppa_slave_get_time();
+
+            remote_point.xpos += halo_value;
+            remote_point.ypos += halo_value;
+            
+            if(inner_iterations % 2 == 0) {
+                auto swap_time_aux = mppa_slave_get_time();
+                mppa_async_segment_t *aux = input_mppa_segment;
+                input_mppa_segment = output_mppa_segment;
+                
+                mppa_async_point2d_t local_point = {
+                    0 + halo_value,  // xpos
+                    0 + halo_value,  // ypos
+                    width_enlarged,  // xdim
+                    height_enlarged, // ydim
+                };
+
+                assert(mppa_async_sput_block2d(input_grid, 
+                                               input_mppa_segment,
+                                               0, sizeof(float), tilling_width, tilling_height,
+                                               &local_point,
+                                               &remote_point,
+                                               NULL) == 0);
+  
+                input_mppa_segment = aux;
+                segment_swap_time += mppa_slave_diff_time(swap_time_aux, mppa_slave_get_time());
+            } else {
+                mppa_async_point2d_t local_point = {
+                    0 + halo_value,  // xpos
+                    0 + halo_value,  // ypos
+                    width_enlarged,  // xdim
+                    height_enlarged, // ydim
+                };
+
+                assert(mppa_async_sput_block2d(output_grid, 
+                                               output_mppa_segment,
+                                               0, sizeof(float), tilling_width, tilling_height,
+                                               &local_point,
+                                               &remote_point,
+                                               NULL) == 0);
+            } 
+
+            end_comm = mppa_slave_get_time();
+            comm_time += mppa_slave_diff_time(begin_comm, end_comm);
+  
+            --nb_tiles_aux;
+        }
+        j = 0; /* "reset" ypos of tile */
     }
-};
+    auto barrier_time_aux = mppa_slave_get_time();
+    mppa_rpc_barrier_all();
+    barrier_time += mppa_slave_diff_time(barrier_time_aux, mppa_slave_get_time());
 
-int wbImage_getWidth(const wbImage_t& image){
-    return image._imageWidth;
-}
-
-int wbImage_getHeight(const wbImage_t& image){
-    return image._imageHeight;
-}
-
-int wbImage_getChannels(const wbImage_t& image){
-    return image._imageChannels;
-}
-
-wbImage_t wbImport(char* inputFile){
-    wbImage_t image;
-    image._imageChannels = 3;
-
-    std::ifstream fileInput;
-    fileInput.open(inputFile, std::ios::binary);
-    if (fileInput.is_open()) {
-        char magic[2];
-        fileInput.read(magic, 2);
-        if (magic[0] != 'P' || magic[1] !='6') {
-            std::cout << "expected 'P6' but got " << magic[0] << magic[1] << std::endl;
-            exit(1);
-        }
-        char tmp = fileInput.peek();
-        while (isspace(tmp)) {
-            fileInput.read(&tmp, 1);
-            tmp = fileInput.peek();
-        }
-        // filter image comments
-        if (tmp == '#') {
-            fileInput.read(&tmp, 1);
-            tmp = fileInput.peek();
-            while (tmp != '\n') {
-                fileInput.read(&tmp, 1);
-                tmp = fileInput.peek();
-            }
-        }
-        // get rid of whitespaces
-        while (isspace(tmp)) {
-            fileInput.read(&tmp, 1);
-            tmp = fileInput.peek();
-        }
-
-        //read dimensions (TODO add error checking)
-        char widthStr[64], heightStr[64], numColorsStr[64], *p;
-        p = widthStr;
-        if(isdigit(tmp)) {
-            while(isdigit(*p = fileInput.get())) {
-                p++;
-            }
-            *p = '\0';
-            image._imageWidth = atoi(widthStr);
-            //std::cout << "Width: " << image._imageWidth << std::endl;
-            p = heightStr;
-            while(isdigit(*p = fileInput.get())) {
-                p++;
-            }
-            *p = '\0';
-            image._imageHeight = atoi(heightStr);
-            //std::cout << "Height: " << image._imageHeight << std::endl;
-            p = numColorsStr;
-            while(isdigit(*p = fileInput.get())) {
-                p++;
-            }
-            *p = '\0';
-            int numColors = atoi(numColorsStr);
-            //std::cout << "Num colors: " << numColors << std::endl;
-            if (numColors != 255) {
-                std::cout << "the number of colors should be 255, but got " << numColors << std::endl;
-                exit(1);
-            }
-        } else  {
-            std::cout << "error - cannot read dimensions" << std::endl;
-        }
-
-        int dataSize = image._imageWidth*image._imageHeight*image._imageChannels;
-        unsigned char* data = new unsigned char[dataSize];
-        fileInput.read((char*)data, dataSize);
-        //float* floatData = new float[dataSize];
-        
-    new (&(image._red)) PSkel::Array2D<float>(image._imageWidth,image._imageHeight);
-    new (&(image._green)) PSkel::Array2D<float>(image._imageWidth,image._imageHeight);
-    new (&(image._blue)) PSkel::Array2D<float>(image._imageWidth,image._imageHeight);
+    auto swap_time_aux_2 = mppa_slave_get_time();
     
-    for (int y = 0; y < image._imageHeight; y++){
-      for (int x = 0; x < image._imageWidth; x++){
-          image._red(x,y) =   1.0*data[(y*image._imageWidth + x)*3 + 0]/255.0f;
-          image._green(x,y) = 1.0*data[(y*image._imageWidth + x)*3 + 1]/255.0f;
-          image._blue(x,y) =  1.0*data[(y*image._imageWidth + x)*3 + 2]/255.0f;
-          
-          /*if(x==1000 && y==1000){
-            cout<<(int)data[(y*image._imageWidth + x)*3 + 0]<<" ";
-            cout<<(int)data[(y*image._imageWidth + x)*3 + 1]<<" ";
-            cout<<(int)data[(y*image._imageWidth + x)*3 + 2]<<endl;
-          }*/
-      }
-    }
-        fileInput.close();
-    } else  {
-         std::cout << "cannot open file " << inputFile;
-         exit(1);
-    }
-    return image;
+    /* Segments swap */
+    mppa_async_segment_t* aux = input_mppa_segment;
+    input_mppa_segment = output_mppa_segment;
+    output_mppa_segment = aux;
+
+    segment_swap_time += mppa_slave_diff_time(swap_time_aux_2, mppa_slave_get_time());
+
 }
 
-wbImage_t wbImage_new(int imageWidth, int imageHeight, int imageChannels)
-{
-    wbImage_t image(imageWidth, imageHeight, imageChannels);
-    return image;
+auto end_exec = mppa_slave_get_time();
+exec_time = mppa_slave_diff_time(begin_exec, end_exec);
+
+std::cout<< "Slave Time: " << exec_time << std::endl;
+std::cout<< "Comm. Time: " << comm_time << std::endl;
+std::cout<< "Clear Time: " << clear_time << std::endl;
+std::cout<< "Swap Time: " << segment_swap_time << std::endl;
+std::cout<< "Work_Area Time: " << work_area_time << std::endl;
+std::cout<< "Computation Time: " << computation_time << std::endl;
+std::cout<< "Barrier Time: " << barrier_time << std::endl;
+
+free(input_grid);
+free(output_grid);
+delete work_area;
+delete input_mppa_segment;
+delete output_mppa_segment;
+
+mppa_async_final();
+return 0;
 }
-
-void wbImage_save(wbImage_t& image, char* outputfile) {
-    std::ofstream outputFile(outputfile, std::ios::binary);
-    char buffer[64];
-    std::string magic = "P6\n";
-    outputFile.write(magic.c_str(), magic.size());
-    std::string comment  =  "# image generated by applying convolution\n";
-    outputFile.write(comment.c_str(), comment.size());
-    //write dimensions
-    sprintf(buffer,"%d", image._imageWidth);
-    outputFile.write(buffer, strlen(buffer));
-    buffer[0] = ' ';
-    outputFile.write(buffer, 1);
-    sprintf(buffer,"%d", image._imageHeight);
-    outputFile.write(buffer, strlen(buffer));
-    buffer[0] = '\n';
-    outputFile.write(buffer, 1);
-    std::string colors = "255\n";
-    outputFile.write(colors.c_str(), colors.size());
-
-    int dataSize = image._imageWidth*image._imageHeight*image._imageChannels;
-    unsigned char* rgbData = new unsigned char[dataSize];
-
-  
-  for (int y = 0; y < image._imageHeight; y++){   
-    for (int x = 0; x < image._imageWidth; x++){
-      rgbData[(y*image._imageWidth + x)*3 + 0] = ceil(image._red(x,y) * 255);
-      rgbData[(y*image._imageWidth + x)*3 + 1] = ceil(image._green(x,y) * 255);
-      rgbData[(y*image._imageWidth + x)*3 + 2] = ceil(image._blue(x,y) * 255);
-    } 
-  }
-
-  outputFile.write((char*)rgbData, dataSize);
-    delete[] rgbData;
-  outputFile.close();
-}
-
-//*******************************************************************************************
-// CONVOLUTION
-//*******************************************************************************************
-
-namespace PSkel{
- __parallel__ void stencilKernel(Array2D<float> &input,Array2D<float> &output,Mask2D<float> mask, Arguments args, size_t i, size_t j){
-    //float accum = 0.0f;
-    /*for(int n=0;n<mask.size;n++){
-      accum += mask.get(n,input,i,j) * mask.getWeight(n);
-    }
-    output(i,j)= accum;
-    */
-    output(i,j) = input(i-2, j+2) * mask.getWeight(0) +
-                  input(i-1, j+2) * mask.getWeight(1) +
-                  input(i  , j+2) * mask.getWeight(2) +
-                  input(i+1, j+2) * mask.getWeight(3) +
-                  input(i+2, j+2) * mask.getWeight(4) +
-                  input(i-2, j+1) * mask.getWeight(5) +
-                  input(i-1, j+1) * mask.getWeight(6) +
-                  input(i  , j+1) * mask.getWeight(7) +
-                  input(i+1, j+1) * mask.getWeight(8) +
-                  input(i+2, j+1) * mask.getWeight(9) +
-                  input(i-2, j) * mask.getWeight(10) +
-                  input(i-1, j) * mask.getWeight(11) +
-                  input(i  , j) * mask.getWeight(12) +
-                  input(i+1, j) * mask.getWeight(13) +
-                  input(i+2, j) * mask.getWeight(14) +
-                  input(i-2, j-1) * mask.getWeight(15) +
-                  input(i-1, j-1) * mask.getWeight(16) +
-                  input(i  , j-1) * mask.getWeight(17) +
-                  input(i+1, j-1) * mask.getWeight(18) +
-                  input(i+2, j-1) * mask.getWeight(19) +
-                  input(i-2, j-2) * mask.getWeight(20) +
-                  input(i-1, j-2) * mask.getWeight(21) +
-                  input(i  , j-2) * mask.getWeight(22) +
-                  input(i+1, j-2) * mask.getWeight(23) +
-                  input(i+2, j-2) * mask.getWeight(24); 
-  }
-}//end namespace
-
-//*******************************************************************************************
-// MAIN
-//*******************************************************************************************
-
-int main(int argc, char **argv){  
-
-  Arguments arg;
-  arg.dummy = 1;
-  Mask2D<float> mask(25);
-  mask.set(0,-2,2,0.0); mask.set(1,-1,2,0.0); mask.set(2,0,2,0.0);  mask.set(3,1,2,0.0);  mask.set(4,2,2,0.0);
-  mask.set(5,-2,1,0.0); mask.set(6,-1,1,0.0); mask.set(7,0,1,0.1);  mask.set(8,1,1,0.0);  mask.set(9,2,1,0.0);
-  mask.set(10,-2,0,0.0);  mask.set(11,-1,0,0.1);  mask.set(12,0,0,0.2); mask.set(13,1,0,0.1); mask.set(14,2,0,0.0);
-  mask.set(15,-2,-1,0.0); mask.set(16,-1,-1,0.0); mask.set(17,0,-1,0.1);  mask.set(18,1,-1,0.0);  mask.set(19,2,-1,0.0);
-  mask.set(20,-2,-2,0.0); mask.set(21,-1,-2,0.0); mask.set(22,0,-2,0.0);  mask.set(23,1,-2,0.0);  mask.set(24,2,-2,0.0);
-  
-  int nb_tiles = atoi(argv[0]);
-  int tilling_width = atoi(argv[1]);
-  int tilling_height = atoi(argv[2]);
-  int cluster_id = atoi(argv[3]);
-  int nb_threads = atoi(argv[4]);
-  int inner_iterations = atoi(argv[5]);
-  int outter_iterations = atoi(argv[6]);
-  int itMod = atoi(argv[7]);
-  int nb_clusters = atoi(argv[8]);
-  int width = atoi(argv[9]);
-  int height = atoi(argv[10]);
-  int nb_computated_tiles = atoi(argv[11]);
-
-  int halo_value = mask.getRange() * inner_iterations;
-
-  Array2D<float> partInput(tilling_width, tilling_height, halo_value);
-  Array2D<float> output(tilling_width, tilling_height, halo_value);
-  Stencil2D<Array2D<float>, Mask2D<float>, Arguments> stencil(partInput, output, mask, arg);
-
-  stencil.runMPPA(cluster_id, nb_threads, nb_tiles, outter_iterations, inner_iterations, itMod, nb_clusters, width, height, nb_computated_tiles);
-
-  return 0;
-}
-

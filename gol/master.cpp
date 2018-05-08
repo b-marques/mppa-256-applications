@@ -1,49 +1,59 @@
-#include <stdio.h>
-#include <string.h>
-#include <assert.h>
-#include <stdlib.h>
-#include <sched.h>
-#include <unistd.h>
-#include <mppaipc.h>
+#include <stdio.h>   /* printf */
+#include <stdlib.h>  /* exit   */
+#include <math.h>    /* ceil   */
+#include <assert.h>  /* assert */ 
+#include <utask.h>
+#include <mppa_async.h>
+#include <mppa_power.h>
+
+#include <iostream>
 
 #define ARGC_SLAVE 14
 
-int main(int argc, char **argv){
+int main(int argc, char **argv)
+{
     if(argc != 9){
         printf ("Wrong number of parameters.\n");
         printf("Usage: WIDTH HEIGHT TILING_HEIGHT TILING_WIDTH ITERATIONS INNER_ITERATIONS NUMBER_CLUSTERS NUMBER_THREADS\n");
         exit(-1);
     }
 
-    int width, 
-        height,
-        tiling_height,
-        tiling_width,
-        iterations,
-        inner_iterations,
-        nb_clusters,
-        nb_threads,
-        mask_range,
-        halo_value;
-
-    int *input_grid;
-    int *output_grid;
-    mppa_async_segment_t* input_mppa_segment;
-    mppa_async_segment_t* output_mppa_segment;
-
     /* Args reading */
-    width            = atoi(argv[1]);
-    height           = atoi(argv[2]);
-    tiling_height    = atoi(argv[3]);
-    tiling_width     = atoi(argv[4]);
-    iterations       = atoi(argv[5]);
-    inner_iterations = atoi(argv[6]);
-    nb_clusters      = atoi(argv[7]);
-    nb_threads       = atoi(argv[8]);
+    int width            = atoi(argv[1]);
+    int height           = atoi(argv[2]);
+    int tiling_height    = atoi(argv[3]);
+    int tiling_width     = atoi(argv[4]);
+    int iterations       = atoi(argv[5]);
+    int inner_iterations = atoi(argv[6]);
+    int nb_clusters      = atoi(argv[7]);
+    int nb_threads       = atoi(argv[8]);
 
     /* MPPA initialization */
     mppa_rpc_server_init(1, 0, nb_clusters);
     mppa_async_server_init();
+
+    int  mask_range;
+    int  halo_value;
+    int  width_enlarged;
+    int  height_enlarged;    
+    int *input_grid;
+    int *output_grid;
+    mppa_async_segment_t input_mppa_segment;
+    mppa_async_segment_t output_mppa_segment;
+
+    /* Initializing arrays */
+    mask_range = 1;
+    halo_value = mask_range * inner_iterations;
+    width_enlarged = width + (halo_value * 2);
+    height_enlarged = height + (halo_value * 2);
+
+    input_grid = (int *)calloc(width_enlarged * height_enlarged, sizeof(int));
+    output_grid = (int *)calloc(width_enlarged * height_enlarged, sizeof(int));
+
+    srand(1234);
+    for(int h = 0 + halo_value; h < height + halo_value; h++)
+        for(int w = 0 + halo_value; w < width + halo_value; w++)
+            input_grid[h * width_enlarged + w] = rand()%2;
 
     /* Prepare to spawn clusters */
     size_t w_tiling = ceil(float(width)/float(tiling_width));
@@ -95,26 +105,8 @@ int main(int argc, char **argv){
     utask_t t;
     utask_create(&t, NULL, (void* (*)(void*))mppa_rpc_server_start, NULL);
 
-    /* Initializing arrays */
-    mask_range = 1;
-    halo_value = mask_range * inner_iterations;
-    width_enlarged = width + (halo_value * 2);
-    height_enlarged = height + (halo_value * 2);
-
-    input_grid = calloc(width_enlarged * height_enlarged, sizeof(int));
-    output_grid = calloc(width_enlarged * height_enlarged, sizeof(int));
-    output_mppa_segment = new mppa_async_segment_t();
-    input_mppa_segment  = new mppa_async_segment_t();
- 
-    srand(1234);
-    for(int h = 0 + halo_value; h < height + halo_value; h++)
-        for(int w = 0 + halo_value; w < width + halo_value; w++)
-            input_grid[h * width_enlarged + w] = rand()%2;
-
-
-    assert(mppa_async_segment_create(input_mppa_segment,  1, input_grid,  sizeof(width_enlarged * height_enlarged, sizeof(int)),  0, 0, NULL) == 0);
-    assert(mppa_async_segment_create(output_mppa_segment, 2, output_grid, sizeof(width_enlarged * height_enlarged, sizeof(int)), 0, 0, NULL) == 0);
-        
+    assert(mppa_async_segment_create(&input_mppa_segment,  1, input_grid,  width_enlarged * height_enlarged * sizeof(int), 0, 0, NULL) == 0);
+    assert(mppa_async_segment_create(&output_mppa_segment, 2, output_grid, width_enlarged * height_enlarged * sizeof(int), 0, 0, NULL) == 0);
 
     /* Wait the end of the clusters */
     int status = 0;
@@ -125,19 +117,18 @@ int main(int argc, char **argv){
         }
         status += ret;
     }
+
     if(status != 0)
         exit(-1);
 
     /* House keeping */
-    assert(mppa_async_segment_destroy(input_mppa_segment)  == 0);
-    assert(mppa_async_segment_destroy(output_mppa_segment) == 0);
+    assert(mppa_async_segment_destroy(&input_mppa_segment)  == 0);
+    assert(mppa_async_segment_destroy(&output_mppa_segment) == 0);
     for (auto i = 0; i < ARGC_SLAVE; ++i)
         free(argv_slave[i]);
     free(argv_slave);
     free(input_grid);
     free(output_grid);
-    delete input_mppa_segment;
-    delete output_mppa_segment;
 
     return 0;
 }
