@@ -3,6 +3,8 @@
 #include <math.h>    /* ceil      */
 #include <assert.h>  /* assert    */ 
 #include <iostream>  /* std::cout */
+#include <chrono>    /* std::steady_clock */
+#include <time.h>    
 #include <omp.h>
 #include <mppa_async.h>
 
@@ -12,31 +14,32 @@ static float h_constant;
 
 void stencil_kernel(float *input, float *output, int width, int i, int j)
 {
-    output[i*width + j] = input[(i-2)*width + (j+2)] * 0.0 +
-                          input[(i-1)*width + (j+2)] * 0.0 +
-                          input[ i   *width + (j+2)] * 0.0 +
-                          input[(i+1)*width + (j+2)] * 0.0 +
-                          input[(i+2)*width + (j+2)] * 0.0 +
-                          input[(i-2)*width + (j+1)] * 0.0 +
-                          input[(i-1)*width + (j+1)] * 0.0 +
+    output[i*width + j] = 
+                          // input[(i-2)*width + (j+2)] * 0.0 +
+                          // input[(i-1)*width + (j+2)] * 0.0 +
+                          // input[ i   *width + (j+2)] * 0.0 +
+                          // input[(i+1)*width + (j+2)] * 0.0 +
+                          // input[(i+2)*width + (j+2)] * 0.0 +
+                          // input[(i-2)*width + (j+1)] * 0.0 +
+                          // input[(i-1)*width + (j+1)] * 0.0 +
                           input[ i   *width + (j+1)] * 0.1 +
-                          input[(i+1)*width + (j+1)] * 0.0 +
-                          input[(i+2)*width + (j+1)] * 0.0 +
-                          input[(i-2)*width +  j   ] * 0.0 +
+                          // input[(i+1)*width + (j+1)] * 0.0 +
+                          // input[(i+2)*width + (j+1)] * 0.0 +
+                          // input[(i-2)*width +  j   ] * 0.0 +
                           input[(i-1)*width +  j   ] * 0.1 +
                           input[ i   *width +  j   ] * 0.2 +
                           input[(i+1)*width +  j   ] * 0.1 +
-                          input[(i+2)*width +  j   ] * 0.0 +
-                          input[(i-2)*width + (j-1)] * 0.0 +
-                          input[(i-1)*width + (j-1)] * 0.0 +
-                          input[ i   *width + (j-1)] * 0.1 +
-                          input[(i+1)*width + (j-1)] * 0.0 +
-                          input[(i+2)*width + (j-1)] * 0.0 +
-                          input[(i-2)*width + (j-2)] * 0.0 +
-                          input[(i-1)*width + (j-2)] * 0.0 +
-                          input[ i   *width + (j-2)] * 0.0 +
-                          input[(i+1)*width + (j-2)] * 0.0 +
-                          input[(i+2)*width + (j-2)] * 0.0; 
+                          // input[(i+2)*width +  j   ] * 0.0 +
+                          // input[(i-2)*width + (j-1)] * 0.0 +
+                          // input[(i-1)*width + (j-1)] * 0.0 +
+                          input[ i   *width + (j-1)] * 0.1;
+                          // input[(i+1)*width + (j-1)] * 0.0 +
+                          // input[(i+2)*width + (j-1)] * 0.0 +
+                          // input[(i-2)*width + (j-2)] * 0.0 +
+                          // input[(i-1)*width + (j-2)] * 0.0 +
+                          // input[ i   *width + (j-2)] * 0.0 +
+                          // input[(i+1)*width + (j-2)] * 0.0 +
+                          // input[(i+2)*width + (j-2)] * 0.0; 
 }
 
 void run_openmp(float *in, float *out, int width, int nb_threads, struct work_area_t *work_area)
@@ -108,6 +111,7 @@ auto end_comm = mppa_slave_get_time();
 comm_time += mppa_slave_diff_time(begin_comm, end_comm);
 
 struct work_area_t* work_area = new work_area_t(0, 0, 0, 0, {0,0,0,0});
+
 
 for(int out_iteration = 0; out_iteration < outter_iterations; ++out_iteration){
     int nb_tiles_aux = nb_tiles;
@@ -264,6 +268,7 @@ for(int out_iteration = 0; out_iteration < outter_iterations; ++out_iteration){
         }
         j = 0; /* "reset" ypos of tile */
     }
+
     auto barrier_time_aux = mppa_slave_get_time();
     mppa_rpc_barrier_all();
     barrier_time += mppa_slave_diff_time(barrier_time_aux, mppa_slave_get_time());
