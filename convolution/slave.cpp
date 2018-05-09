@@ -3,8 +3,6 @@
 #include <math.h>    /* ceil      */
 #include <assert.h>  /* assert    */ 
 #include <iostream>  /* std::cout */
-#include <chrono>    /* std::steady_clock */
-#include <time.h>    
 #include <omp.h>
 #include <mppa_async.h>
 
