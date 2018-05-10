@@ -80,6 +80,15 @@ output_grid = (float*)calloc(width_enlarged * height_enlarged, sizeof(float));
 input_mppa_segment  = new mppa_async_segment_t();
 output_mppa_segment = new mppa_async_segment_t();
 
+if(!input_grid) {
+    std::cout << "Fail to allocate input_grid" << std::endl;
+    exit(-1);
+}
+if(!output_grid) {
+    std::cout << "Fail to allocate output_grid" << std::endl;
+    exit(-1);
+}
+
 h_constant = 4.f / (float) (width*width);
 
 double exec_time = 0;

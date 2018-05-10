@@ -57,6 +57,9 @@ int height_enlarged = tilling_height + (halo_value * 2);
 
 input_grid  = (int*)calloc(width_enlarged * height_enlarged, sizeof(int));
 output_grid = (int*)calloc(width_enlarged * height_enlarged, sizeof(int));
+input_mppa_segment  = new mppa_async_segment_t();
+output_mppa_segment = new mppa_async_segment_t();
+
 if(!input_grid) {
     std::cout << "Fail to allocate input_grid" << std::endl;
     exit(-1);
@@ -65,9 +68,6 @@ if(!output_grid) {
     std::cout << "Fail to allocate output_grid" << std::endl;
     exit(-1);
 }
-
-input_mppa_segment  = new mppa_async_segment_t();
-output_mppa_segment = new mppa_async_segment_t();
 
 double exec_time = 0;
 double comm_time = 0;
