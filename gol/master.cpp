@@ -86,6 +86,13 @@ int main(int argc, char **argv)
     int tiles_slave;
     int nb_computated_tiles = 0;
 
+    /* Create a task to manage the rpc server on another processor */
+    utask_t t;
+    utask_create(&t, NULL, (void* (*)(void*))mppa_rpc_server_start, NULL);
+
+    assert(mppa_async_segment_create(&input_mppa_segment,  1, input_grid,  width_enlarged * height_enlarged * sizeof(int), 0, 0, NULL) == 0);
+    assert(mppa_async_segment_create(&output_mppa_segment, 2, output_grid, width_enlarged * height_enlarged * sizeof(int), 0, 0, NULL) == 0);
+    
     /* Loop to cluster initialization */
     for (cluster_id = 0; cluster_id < nb_clusters && cluster_id < (int)total_size; cluster_id++) {
         r = (cluster_id < it_mod)?1:0;
@@ -101,12 +108,6 @@ int main(int argc, char **argv)
             printf("# [IODDR0] Fail to Spawn cluster %d\n", cluster_id);
     }
 
-    /* Create a task to manage the rpc server on another processor */
-    utask_t t;
-    utask_create(&t, NULL, (void* (*)(void*))mppa_rpc_server_start, NULL);
-
-    assert(mppa_async_segment_create(&input_mppa_segment,  1, input_grid,  width_enlarged * height_enlarged * sizeof(int), 0, 0, NULL) == 0);
-    assert(mppa_async_segment_create(&output_mppa_segment, 2, output_grid, width_enlarged * height_enlarged * sizeof(int), 0, 0, NULL) == 0);
 
     /* Wait the end of the clusters */
     int status = 0;
