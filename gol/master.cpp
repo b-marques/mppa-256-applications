@@ -28,9 +28,6 @@ int main(int argc, char **argv)
     int nb_clusters      = atoi(argv[7]);
     int nb_threads       = atoi(argv[8]);
 
-    /* MPPA initialization */
-    mppa_rpc_server_init(1, 0, nb_clusters);
-    mppa_async_server_init();
 
     int  mask_range;
     int  halo_value;
@@ -59,6 +56,10 @@ int main(int argc, char **argv)
     size_t w_tiling = ceil(float(width)/float(tiling_width));
     size_t h_tiling = ceil(float(height)/float(tiling_height));
     size_t total_size = float(h_tiling*w_tiling);
+
+    /* MPPA initialization */
+    mppa_rpc_server_init(1, 0, total_size < nb_clusters ? total_size : nb_clusters);
+    mppa_async_server_init();
 
     int tiles = total_size/nb_clusters;
     int it_mod = total_size % nb_clusters;
@@ -92,7 +93,7 @@ int main(int argc, char **argv)
 
     assert(mppa_async_segment_create(&input_mppa_segment,  1, input_grid,  width_enlarged * height_enlarged * sizeof(int), 0, 0, NULL) == 0);
     assert(mppa_async_segment_create(&output_mppa_segment, 2, output_grid, width_enlarged * height_enlarged * sizeof(int), 0, 0, NULL) == 0);
-    
+
     /* Loop to cluster initialization */
     for (cluster_id = 0; cluster_id < nb_clusters && cluster_id < (int)total_size; cluster_id++) {
         r = (cluster_id < it_mod)?1:0;
