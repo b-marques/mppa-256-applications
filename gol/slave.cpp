@@ -60,6 +60,15 @@ output_grid = (int*)calloc(width_enlarged * height_enlarged, sizeof(int));
 input_mppa_segment  = new mppa_async_segment_t();
 output_mppa_segment = new mppa_async_segment_t();
 
+if(!input_grid) {
+    std::cout << "Fail to allocate input_grid" << std::endl;
+    exit(-1);
+}
+if(!output_grid) {
+    std::cout << "Fail to allocate output_grid" << std::endl;
+    exit(-1);
+}
+
 double exec_time = 0;
 double comm_time = 0;
 double clear_time = 0;
@@ -67,6 +76,8 @@ double segment_swap_time = 0;
 double work_area_time = 0;
 double computation_time = 0;
 double barrier_time = 0;
+
+mppa_rpc_barrier_all();
 
 auto begin_exec = mppa_slave_get_time();
 auto begin_comm = mppa_slave_get_time();
