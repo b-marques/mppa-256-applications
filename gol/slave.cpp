@@ -68,6 +68,8 @@ double work_area_time = 0;
 double computation_time = 0;
 double barrier_time = 0;
 
+mppa_rpc_barrier_all();
+
 auto begin_exec = mppa_slave_get_time();
 auto begin_comm = mppa_slave_get_time();
 
